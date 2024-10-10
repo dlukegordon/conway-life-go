@@ -1,0 +1,11 @@
+linters:
+  enable:
+    - lll
+    - revive
+
+linters-settings:
+  revive:
+    rules:
+      - name: unused-parameter
+        arguments:
+          - allowRegex: "^_.*"
