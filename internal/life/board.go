@@ -1,4 +1,4 @@
-package board
+package life
 
 import (
 	"errors"
@@ -8,9 +8,9 @@ type (
 	Cells [][]bool
 
 	Board struct {
-		Cells Cells
-		YLen  uint
-		XLen  uint
+		cells Cells
+		yLen  uint
+		xLen  uint
 	}
 
 	Position struct {
@@ -18,13 +18,13 @@ type (
 		x uint
 	}
 
-	Offset struct {
+	offset struct {
 		y int
 		x int
 	}
 )
 
-var Directions = [8]Offset{
+var Directions = [8]offset{
 	{-1, -1},
 	{-1, 0},
 	{-1, 1},
@@ -97,21 +97,29 @@ func NewBoardFromCells(cells Cells) (*Board, error) {
 	}, nil
 }
 
-func (b Board) inBounds(pos Position) bool {
-	return pos.y < b.YLen && pos.x < b.XLen
+func (b *Board) YLen() uint {
+	return b.yLen
 }
 
-func (b Board) CellAlive(pos Position) bool {
+func (b *Board) XLen() uint {
+	return b.xLen
+}
+
+func (b *Board) CellAlive(pos Position) bool {
 	if !b.inBounds(pos) {
 		panic("Tried to access an out of bounds cell state")
 	}
-	return b.Cells[pos.y][pos.x]
+	return b.cells[pos.y][pos.x]
+}
+
+func (b *Board) inBounds(pos Position) bool {
+	return pos.y < b.yLen && pos.x < b.xLen
 }
 
 // Return nil if the neighbor is out of bounds, otherwise a pointer to the position
-func (b Board) neighbor(pos Position, offset Offset) *Position {
-	newY := addAxisOffset(pos.y, offset.y, b.YLen)
-	newX := addAxisOffset(pos.x, offset.x, b.XLen)
+func (b *Board) neighbor(pos Position, offset offset) *Position {
+	newY := addAxisOffset(pos.y, offset.y, b.yLen)
+	newX := addAxisOffset(pos.x, offset.x, b.xLen)
 	if newY == nil || newX == nil {
 		return nil
 	}
@@ -120,7 +128,7 @@ func (b Board) neighbor(pos Position, offset Offset) *Position {
 }
 
 // Return an array of position pointers, nil when the neighbor is out of bounds
-func (b Board) neighbors(pos Position) []*Position {
+func (b *Board) neighbors(pos Position) []*Position {
 	var neighbors []*Position
 
 	for _, direction := range Directions {
@@ -131,7 +139,7 @@ func (b Board) neighbors(pos Position) []*Position {
 	return neighbors
 }
 
-func (b Board) numLiveNeighbors(pos Position) uint {
+func (b *Board) numLiveNeighbors(pos Position) uint {
 	var numLive uint
 	neighbors := b.neighbors(pos)
 
@@ -150,34 +158,43 @@ func (b Board) numLiveNeighbors(pos Position) uint {
 	return numLive
 }
 
-func (b Board) NextBoard() *Board {
-	nextBoard := NewBoard(b.YLen, b.XLen)
+func (b *Board) nextBoard() *Board {
+	nextBoard := NewBoard(b.yLen, b.xLen)
 
-	for y := range b.YLen {
-		for x := range b.XLen {
+	for y := range b.yLen {
+		for x := range b.xLen {
 			pos := Position{y, x}
 			alive := b.CellAlive(pos)
 			numLiveNeighbors := b.numLiveNeighbors(pos)
-			nextBoard.Cells[y][x] = nextCellState(alive, numLiveNeighbors)
+			nextBoard.cells[y][x] = nextCellState(alive, numLiveNeighbors)
 		}
 	}
 
 	return nextBoard
 }
 
-func (b Board) Add(pattern *Board, pos Position) error {
-	furthestPatternPos := Position{pos.y + pattern.YLen, pos.x + pattern.XLen}
+// Add a pattern to a board, returning a new board to retain immutability
+func (b *Board) Add(pattern *Board, pos Position) (*Board, error) {
+	furthestPatternPos := Position{pos.y + pattern.yLen, pos.x + pattern.xLen}
 	if !b.inBounds(furthestPatternPos) {
-		return errors.New("Pattern will not fit in board at that position (if any)")
+		return nil, errors.New("Pattern will not fit in board at that position (if any)")
 	}
 
-	for y := range pattern.YLen {
-		for x := range pattern.XLen {
-			boardY := pos.y + y
-			boardX := pos.x + x
-			b.Cells[boardY][boardX] = pattern.Cells[y][x]
+	// TODO: don't bother copying the cells which will be overwritten by the pattern
+	newBoard := NewBoard(b.yLen, b.xLen)
+	for y := range b.yLen {
+		for x := range b.xLen {
+			newBoard.cells[y][x] = b.cells[y][x]
 		}
 	}
 
-	return nil
+	for y := range pattern.yLen {
+		for x := range pattern.xLen {
+			boardY := pos.y + y
+			boardX := pos.x + x
+			newBoard.cells[boardY][boardX] = pattern.cells[y][x]
+		}
+	}
+
+	return newBoard, nil
 }

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	b "conway-life-go/internal/board"
+	"conway-life-go/internal/life"
 	"conway-life-go/internal/patterns"
 	u "conway-life-go/internal/util"
 
@@ -15,45 +15,40 @@ import (
 )
 
 var (
-	ColsPerCell   = 2
-	LiveCellChar  = "█"
-	DeadCellChar  = " "
-	LiveCellStr   = strings.Repeat(LiveCellChar, ColsPerCell)
-	DeadCellStr   = strings.Repeat(DeadCellChar, ColsPerCell)
-	InitFps       = uint(10)
-	MinFps        = uint(1)
-	MaxFps        = uint(120)
-	FpsChangeFrac = 0.2
-	UiLines       = uint(1) // Number of lines to leave available in the viewport for ui elements other than the board
-	bold          = color.New(color.Bold).SprintFunc()
+	ColsPerCell           = 2
+	LiveCellChar          = "█"
+	DeadCellChar          = " "
+	LiveCellStr           = strings.Repeat(LiveCellChar, ColsPerCell)
+	DeadCellStr           = strings.Repeat(DeadCellChar, ColsPerCell)
+	InitStepsPerSec       = uint(10)
+	MaxStepsPerSec        = uint(120)
+	StepsPerSecChangeFrac = 0.2
+	UiLines               = uint(1) // Number of lines to leave available in the viewport for elements other than the board
+	bold                  = color.New(color.Bold).SprintFunc()
 )
 
 type (
 	model struct {
-		termHeight uint
-		termWidth  uint
-		board      *b.Board
-		fps        uint
-		stepNum    uint
+		termHeight  uint
+		termWidth   uint
+		game        *life.Game
+		stepsPerSec uint
+		stepBack    bool
 	}
 
 	tickMsg struct{}
 )
 
 func (m model) Init() tea.Cmd {
-	return tick(m.fps)
+	return m.tick()
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tickMsg:
-		m.board = m.board.NextBoard()
-		m.stepNum++
-		return m, tick(m.fps)
+		return m.handleTick()
 	case tea.KeyMsg:
 		return m.handleKeyMsg(msg)
-	case tea.WindowSizeMsg:
-		return m.handleWindowSizeMsg(msg)
 	case tea.MouseMsg:
 		return m.handleMouseMsg(msg)
 	default:
@@ -69,11 +64,11 @@ func Run() error {
 	termHeight, termWidth := getTermDims()
 
 	m := model{
-		termHeight: termHeight,
-		termWidth:  termWidth,
-		board:      setupBoard(),
-		fps:        InitFps,
-		stepNum:    0,
+		termHeight:  termHeight,
+		termWidth:   termWidth,
+		game:        setupGame(),
+		stepsPerSec: InitStepsPerSec,
+		stepBack:    false,
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
@@ -93,7 +88,7 @@ func getTermDims() (uint, uint) {
 	return uint(termHeightInt), uint(termWidthInt)
 }
 
-func setupBoard() *b.Board {
+func setupGame() *life.Game {
 	termWidth, termHeight, err := term.GetSize(0)
 	u.FailIf(err, "getting terminal dimensions")
 	if termWidth < 0 || termHeight < 0 {
@@ -101,20 +96,45 @@ func setupBoard() *b.Board {
 	}
 	height := uint(termHeight) - UiLines
 	width := uint(termWidth / ColsPerCell)
-	board := b.NewBoard(height, width)
+	board := life.NewBoard(height, width)
 
-	patternPos := b.NewPosition(30, 50)
+	patternPos := life.NewPosition(30, 50)
 	pattern := patterns.AcornPattern()
-	err = board.Add(pattern, patternPos)
+	board, err = board.Add(pattern, patternPos)
 	u.FailIf(err, "setting initial board state")
 
-	return board
+	return life.NewGameFromBoard(board)
 }
 
-func tick(fps uint) tea.Cmd {
-	return tea.Tick(time.Second/time.Duration(fps), func(_ time.Time) tea.Msg {
+func (m model) tick() tea.Cmd {
+	// Even if we're paused, we still want to tick every second so we can resume later
+	waitTime := time.Second
+	if m.stepsPerSec > 0 {
+		waitTime = time.Second / time.Duration(m.stepsPerSec)
+	}
+
+	return tea.Tick(waitTime, func(_ time.Time) tea.Msg {
 		return tickMsg{}
 	})
+}
+
+func (m model) handleTick() (tea.Model, tea.Cmd) {
+	if m.stepsPerSec == 0 {
+		// If we're paused, do nothing
+		return m, m.tick()
+	}
+
+	if m.stepBack {
+		err := m.game.StepBack()
+		if err != nil {
+			// We can't go back anymore
+			m.stepsPerSec = 0
+		}
+	} else {
+		m.game.Step()
+	}
+
+	return m, m.tick()
 }
 
 func (m model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -122,19 +142,14 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "q":
 		return m, tea.Quit
 	case "+", "=":
-		m.changeFps(true)
+		m.changeSpeed(true)
 		return m, nil
 	case "-":
-		m.changeFps(false)
+		m.changeSpeed(false)
 		return m, nil
 	default:
 		return m, nil
 	}
-}
-
-func (m model) handleWindowSizeMsg(_msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
-	// TODO:
-	return m, nil
 }
 
 func (m model) handleMouseMsg(_msg tea.MouseMsg) (tea.Model, tea.Cmd) {
@@ -144,13 +159,16 @@ func (m model) handleMouseMsg(_msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 func (m model) renderBoard() string {
 	boardStr := ""
+	board := m.game.CurrentBoard()
 
-	for _, row := range m.board.Cells {
+	for y := range board.YLen() {
 		rowStr := ""
 
-		for _, cell := range row {
+		for x := range board.XLen() {
+			pos := life.NewPosition(uint(y), uint(x))
+
 			cellStr := DeadCellStr
-			if cell {
+			if board.CellAlive(pos) {
 				cellStr = LiveCellStr
 			}
 			rowStr += cellStr
@@ -164,7 +182,11 @@ func (m model) renderBoard() string {
 }
 
 func (m model) renderToolbar() string {
-	left := fmt.Sprintf("fps: %d, stepNum: %d", m.fps, m.stepNum)
+	timeDirectionStr := ""
+	if m.stepBack && m.stepsPerSec > 0 {
+		timeDirectionStr = "-"
+	}
+	left := fmt.Sprintf("stepsPerSec: %s%d, stepNum: %d", timeDirectionStr, m.stepsPerSec, m.game.CurrentStepNum())
 
 	keyInfo := []string{
 		bold("+") + "/" + bold("-") + " change speed",
@@ -188,9 +210,14 @@ func (m model) renderToolbar() string {
 	return fmt.Sprintf(fmtStr, left, right)
 }
 
-func (m *model) changeFps(increase bool) {
-	change := int(float64(m.fps) * FpsChangeFrac)
-	// Make sure we don't get stuck not being able to change the fps
+func (m *model) changeSpeed(increase bool) {
+	// If we're going back in time, then decreasing speed means increasing stepsPerSec, and vice versa
+	if m.stepBack {
+		increase = !increase
+	}
+
+	change := int(float64(m.stepsPerSec) * StepsPerSecChangeFrac)
+	// Make sure we don't get stuck not being able to change the stepsPerSec
 	if change == 0 {
 		change = 1
 	}
@@ -199,14 +226,16 @@ func (m *model) changeFps(increase bool) {
 		change = -change
 	}
 
-	newFps := int(m.fps) + change
-	// Make sure we stay within the bounds of allowed fps
-	if newFps < int(MinFps) {
-		newFps = int(MinFps)
+	newStepsPerSec := int(m.stepsPerSec) + change
+	if newStepsPerSec < 0 {
+		// We're changing time direction
+		newStepsPerSec = 1
+		m.stepBack = !m.stepBack
 	}
-	if newFps > int(MaxFps) {
-		newFps = int(MaxFps)
+	if newStepsPerSec > int(MaxStepsPerSec) {
+		// Make sure we stay within the bounds of allowed stepsPerSec
+		newStepsPerSec = int(MaxStepsPerSec)
 	}
 
-	m.fps = uint(newFps)
+	m.stepsPerSec = uint(newStepsPerSec)
 }

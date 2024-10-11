@@ -1,7 +1,7 @@
 package patterns
 
 import (
-	b "conway-life-go/internal/board"
+	"conway-life-go/internal/life"
 )
 
 const (
@@ -9,7 +9,7 @@ const (
 	DeadChar  = ' '
 )
 
-func stringsToBoard(strs []string) *b.Board {
+func stringsToBoard(strs []string) *life.Board {
 	var cells [][]bool
 
 	for _, strRow := range strs {
@@ -28,14 +28,14 @@ func stringsToBoard(strs []string) *b.Board {
 		cells = append(cells, row)
 	}
 
-	board, err := b.NewBoardFromCells(cells)
+	board, err := life.NewBoardFromCells(cells)
 	if err != nil {
 		panic(err)
 	}
 	return board
 }
 
-func AcornPattern() *b.Board {
+func AcornPattern() *life.Board {
 	strs := []string{
 		"         ",
 		"  X      ",
@@ -47,7 +47,7 @@ func AcornPattern() *b.Board {
 	return stringsToBoard(strs)
 }
 
-func BlinkerPattern() *b.Board {
+func BlinkerPattern() *life.Board {
 	strs := []string{
 		"     ",
 		" XXX ",

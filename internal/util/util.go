@@ -28,3 +28,10 @@ func NumEscapeChars(str string) uint {
 
 	return uint(count)
 }
+
+func Abs(n int) uint {
+	if n < 0 {
+		n *= -1
+	}
+	return uint(n)
+}
